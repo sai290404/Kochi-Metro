@@ -1,0 +1,308 @@
+from flask import Flask, jsonify, request
+from flask_cors import CORS
+import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from models.decision_engine import TrainInductionOptimizer, PredictiveMaintenanceModel
+from data_generators.mock_data import MockDataGenerator
+
+app = Flask(__name__)
+CORS(app)  # Enable CORS for React frontend
+
+# Global variables to store data and models
+data_generator = MockDataGenerator()
+optimizer = TrainInductionOptimizer()
+ml_model = PredictiveMaintenanceModel()
+current_data = None
+current_solution = None
+
+def initialize_data():
+    """Initialize mock data and load into optimizer"""
+    global current_data
+    current_data = data_generator.generate_all_data()
+    optimizer.load_data(current_data)
+    return current_data
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """Health check endpoint"""
+    return jsonify({"status": "healthy", "message": "Kochi Metro Induction System API"})
+
+@app.route('/api/data/refresh', methods=['POST'])
+def refresh_data():
+    """Refresh mock data"""
+    try:
+        data = initialize_data()
+        return jsonify({
+            "status": "success",
+            "message": "Data refreshed successfully",
+            "summary": {
+                "trains": len(data['fitness_certificates']['train_id'].unique()),
+                "fitness_certificates": len(data['fitness_certificates']),
+                "job_cards": len(data['job_cards']),
+                "branding_contracts": len(data['branding_data'])
+            }
+        })
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/trains', methods=['GET'])
+def get_trains():
+    """Get all train data"""
+    if current_data is None:
+        initialize_data()
+    
+    try:
+        trains_summary = []
+        for train_id in current_data['fitness_certificates']['train_id'].unique():
+            # Get readiness score
+            readiness = optimizer.calculate_train_readiness_score(train_id)
+            branding = optimizer.calculate_branding_priority(train_id)
+            maintenance = optimizer.calculate_maintenance_urgency(train_id)
+            
+            # Get current status from latest solution if available
+            status = "Unknown"
+            if current_solution:
+                if train_id in current_solution['inducted_for_service']:
+                    status = "Service"
+                elif train_id in current_solution['standby']:
+                    status = "Standby"
+                elif train_id in current_solution['maintenance_ibl']:
+                    status = "Maintenance"
+            
+            # Get key issues
+            issues = []
+            train_certs = current_data['fitness_certificates'][current_data['fitness_certificates']['train_id'] == train_id]
+            expired_certs = len(train_certs[train_certs['status'] == 'Expired'])
+            if expired_certs > 0:
+                issues.append(f"{expired_certs} expired certificates")
+            
+            train_jobs = current_data['job_cards'][current_data['job_cards']['train_id'] == train_id]
+            open_jobs = len(train_jobs[train_jobs['status'].isin(['Open', 'In Progress'])])
+            if open_jobs > 0:
+                issues.append(f"{open_jobs} open jobs")
+            
+            trains_summary.append({
+                "train_id": train_id,
+                "status": status,
+                "readiness_score": round(readiness, 1),
+                "branding_priority": round(branding, 1),
+                "maintenance_urgency": round(maintenance, 1),
+                "issues": issues
+            })
+        
+        return jsonify({
+            "status": "success",
+            "trains": trains_summary,
+            "total_count": len(trains_summary)
+        })
+    
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/trains/<train_id>', methods=['GET'])
+def get_train_details(train_id):
+    """Get detailed information for a specific train"""
+    if current_data is None:
+        initialize_data()
+    
+    try:
+        # Fitness certificates
+        certs = current_data['fitness_certificates'][current_data['fitness_certificates']['train_id'] == train_id]
+        
+        # Job cards
+        jobs = current_data['job_cards'][current_data['job_cards']['train_id'] == train_id]
+        
+        # Branding data
+        branding = current_data['branding_data'][current_data['branding_data']['train_id'] == train_id]
+        
+        # Mileage data
+        mileage = current_data['mileage_data'][current_data['mileage_data']['train_id'] == train_id]
+        
+        # Cleaning schedule
+        cleaning = current_data['cleaning_schedule'][current_data['cleaning_schedule']['train_id'] == train_id]
+        
+        # Stabling position
+        stabling = current_data['stabling_positions'][current_data['stabling_positions']['train_id'] == train_id]
+        
+        return jsonify({
+            "status": "success",
+            "train_id": train_id,
+            "fitness_certificates": certs.to_dict('records'),
+            "job_cards": jobs.to_dict('records'),
+            "branding_data": branding.to_dict('records'),
+            "mileage_data": mileage.to_dict('records'),
+            "cleaning_schedule": cleaning.to_dict('records'),
+            "stabling_positions": stabling.to_dict('records'),
+            "readiness_score": optimizer.calculate_train_readiness_score(train_id),
+            "branding_priority": optimizer.calculate_branding_priority(train_id),
+            "maintenance_urgency": optimizer.calculate_maintenance_urgency(train_id)
+        })
+    
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/optimize', methods=['POST'])
+def optimize_induction():
+    """Run the optimization algorithm"""
+    if current_data is None:
+        initialize_data()
+    
+    try:
+        # Get parameters from request
+        data = request.get_json() or {}
+        target_service_trains = data.get('target_service_trains', 18)
+        
+        # Run optimization
+        global current_solution
+        current_solution = optimizer.optimize_induction_plan(target_service_trains)
+        
+        if current_solution is None:
+            return jsonify({
+                "status": "error",
+                "message": "Optimization failed - no feasible solution found"
+            }), 400
+        
+        # Generate detailed report
+        report = optimizer.generate_detailed_report(current_solution)
+        
+        return jsonify({
+            "status": "success",
+            "solution": current_solution,
+            "report": report,
+            "optimization_params": {
+                "target_service_trains": target_service_trains,
+                "total_trains": len(optimizer.trains)
+            }
+        })
+    
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/dashboard/summary', methods=['GET'])
+def get_dashboard_summary():
+    """Get summary data for dashboard"""
+    if current_data is None:
+        initialize_data()
+    
+    try:
+        # Calculate summary statistics
+        total_trains = len(current_data['fitness_certificates']['train_id'].unique())
+        
+        # Certificate status
+        cert_summary = current_data['fitness_certificates']['status'].value_counts().to_dict()
+        
+        # Job card priorities
+        job_summary = current_data['job_cards']['priority'].value_counts().to_dict()
+        
+        # Branding status
+        brand_summary = current_data['branding_data']['status'].value_counts().to_dict()
+        
+        # Current solution summary
+        solution_summary = {}
+        if current_solution:
+            solution_summary = current_solution['summary']
+        
+        # Alerts count
+        alerts_count = 0
+        if current_solution:
+            report = optimizer.generate_detailed_report(current_solution)
+            alerts_count = len(report['alerts'])
+        
+        return jsonify({
+            "status": "success",
+            "summary": {
+                "total_trains": total_trains,
+                "certificate_status": cert_summary,
+                "job_priorities": job_summary,
+                "branding_status": brand_summary,
+                "current_allocation": solution_summary,
+                "alerts_count": alerts_count,
+                "last_optimization": current_solution is not None
+            }
+        })
+    
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/alerts', methods=['GET'])
+def get_alerts():
+    """Get current alerts and recommendations"""
+    if current_data is None:
+        initialize_data()
+    
+    try:
+        if current_solution is None:
+            return jsonify({
+                "status": "success",
+                "alerts": [],
+                "recommendations": ["Run optimization to generate alerts and recommendations"]
+            })
+        
+        report = optimizer.generate_detailed_report(current_solution)
+        
+        return jsonify({
+            "status": "success",
+            "alerts": report['alerts'],
+            "recommendations": report['recommendations'],
+            "timestamp": report['timestamp']
+        })
+    
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/simulation', methods=['POST'])
+def run_simulation():
+    """Run what-if simulation with different parameters"""
+    if current_data is None:
+        initialize_data()
+    
+    try:
+        data = request.get_json() or {}
+        scenarios = data.get('scenarios', [])
+        
+        results = []
+        
+        for scenario in scenarios:
+            target_trains = scenario.get('target_service_trains', 18)
+            scenario_name = scenario.get('name', f'Scenario {len(results) + 1}')
+            
+            # Run optimization with different parameters
+            temp_solution = optimizer.optimize_induction_plan(target_trains)
+            
+            if temp_solution:
+                temp_report = optimizer.generate_detailed_report(temp_solution)
+                results.append({
+                    "scenario_name": scenario_name,
+                    "parameters": {"target_service_trains": target_trains},
+                    "solution": temp_solution,
+                    "alerts_count": len(temp_report['alerts']),
+                    "recommendations_count": len(temp_report['recommendations'])
+                })
+            else:
+                results.append({
+                    "scenario_name": scenario_name,
+                    "parameters": {"target_service_trains": target_trains},
+                    "solution": None,
+                    "error": "No feasible solution"
+                })
+        
+        return jsonify({
+            "status": "success",
+            "simulation_results": results
+        })
+    
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+if __name__ == '__main__':
+    # Initialize data on startup
+    initialize_data()
+    print("Starting Kochi Metro Induction System API...")
+    print("Initializing with mock data...")
+    print(f"Loaded data for {len(current_data['fitness_certificates']['train_id'].unique())} trains")
+    
+    app.run(debug=True, host='0.0.0.0', port=5001)
