@@ -8,5 +8,5 @@ xgboost==1.7.6
 python-dateutil==2.8.2
 requests==2.31.0
 gunicorn==21.2.0
-wheel
-Flask
+setuptools==68.2.2
+wheel==0.41.2
