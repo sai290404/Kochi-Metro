@@ -11,8 +11,9 @@ from data_generators.mock_data import MockDataGenerator
 
 app = Flask(__name__)
 
-# ✅ Allow frontend domain (Netlify)
-CORS(app, resources={r"/api/*": {"origins": "https://warm-dragon-47ac2d.netlify.app/"}})
+# ✅ Allow frontend domain (Netlify)CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*"}})
+
 
 # Global variables to store data and models
 data_generator = MockDataGenerator()
