@@ -30,6 +30,9 @@ def initialize_data():
 
 
 # ================== ROUTES ================== #
+@app.route("/")
+def home():
+    return {"message": "Kochi Metro System API is running!"}
 
 @app.route('/api/health', methods=['GET'])
 def health_check():
