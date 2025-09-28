@@ -1,6 +1,6 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'https://kochi-metro-rail.onrender.com';
+const API_BASE_URL = 'https://kochi-metro-system.onrender.com';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
